@@ -1,0 +1,306 @@
+package com.javaguy.wallet_settlement.service;
+
+import com.javaguy.wallet_settlement.model.dto.ReconciliationReport;
+import com.javaguy.wallet_settlement.model.dto.ReconciliationSummary;
+import com.javaguy.wallet_settlement.model.entity.ReconciliationRecord;
+import com.javaguy.wallet_settlement.model.entity.TransactionLedger;
+import com.javaguy.wallet_settlement.model.enums.ReconciliationStatus;
+import com.javaguy.wallet_settlement.model.enums.TransactionType;
+import com.javaguy.wallet_settlement.repository.ReconciliationRecordRepository;
+import com.javaguy.wallet_settlement.repository.TransactionLedgerRepository;
+import com.opencsv.CSVReader;
+import com.opencsv.CSVWriter;
+import com.opencsv.exceptions.CsvValidationException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class ReconciliationService {
+
+    private final ReconciliationRecordRepository reconciliationRecordRepository;
+    private final TransactionLedgerRepository ledgerRepository;
+
+    private static final int BATCH_SIZE = 1000;
+
+    @Transactional
+    public ReconciliationReport runReconciliation(LocalDate date){
+        log.info("Running reconciliation for date: {}", date);
+
+        List<TransactionLedger> internalTransactions = ledgerRepository.findCompletedTransactionsByDate(date);
+        log.info("found {} internal transactions for {}", internalTransactions.size(), date);
+
+        //i have created mock external transactions for testing
+        List<ExternalTransaction> externalTransactions = getMockExternalTransactions(internalTransactions, date);
+        log.info("found {} external transactions for {}", externalTransactions.size(), date);
+
+        List<ReconciliationRecord> reconciliationRecords = performReconciliation(
+                internalTransactions, externalTransactions, date
+        );
+        reconciliationRecordRepository.saveAll(reconciliationRecords);
+        log.info("Reconciliation completed for date: {}", date);
+        return buildReconciliationReport(reconciliationRecords, date);
+    }
+
+    @Transactional
+    public void processExternalReport(MultipartFile file, LocalDate date) throws IOException {
+        log.info("Processing external report file: {} for date: {}",file.getOriginalFilename(), date);
+        List<ExternalTransaction> externalTransactions = parseCSVFile(file);
+        List<TransactionLedger> internalTransactions = ledgerRepository.findCompletedTransactionsByDate(date);
+
+        List<ReconciliationRecord> reconciliationRecords = performReconciliation(
+                internalTransactions, externalTransactions, date
+        );
+        reconciliationRecordRepository.saveAll(reconciliationRecords);
+        log.info("Processed {} reconciliation records for date: {}", reconciliationRecords.size(), date);
+    }
+
+    @Transactional(readOnly = true)
+    public ReconciliationReport getReconciliationReport(LocalDate date) {
+        List<ReconciliationRecord> records = reconciliationRecordRepository.findByReconciliationDate(date);
+        return buildReconciliationReport(records, date);
+    }
+
+    public void exportReconciliationToCsv(LocalDate date, OutputStream outputStream) throws IOException {
+        List<ReconciliationRecord> records = reconciliationRecordRepository.findByReconciliationDate(date);
+
+        try (CSVWriter writer = new CSVWriter(new OutputStreamWriter(outputStream))) {
+            // Write header
+            writer.writeNext(new String[]{
+                    "Reconciliation ID", "Internal Transaction ID", "External Transaction ID",
+                    "Internal Amount", "External Amount", "Status", "Discrepancy Amount", "Reason"
+            });
+
+            // Write data
+            for (ReconciliationRecord record : records) {
+                writer.writeNext(new String[]{
+                        record.getReconciliationId(),
+                        record.getInternalTransactionId(),
+                        record.getExternalTransactionId(),
+                        record.getInternalAmount() != null ? record.getInternalAmount().toString() : "",
+                        record.getExternalAmount() != null ? record.getExternalAmount().toString() : "",
+                        String.valueOf(record.getStatus()),
+                        record.getDiscrepancyAmount().toString(),
+                        record.getDiscrepancyReason()
+                });
+            }
+        }
+    }
+
+    @Scheduled(cron = "0 0 2 * * *")
+    public void scheduledReconciliation() {
+        LocalDate yesterday = LocalDate.now().minusDays(1);
+        try {
+            runReconciliation(yesterday);
+            log.info("Scheduled reconciliation completed for {}", yesterday);
+        } catch (Exception e) {
+            log.error("Scheduled reconciliation failed for {}", yesterday, e);
+        }
+    }
+
+
+    private List<ReconciliationRecord> performReconciliation(
+            List<TransactionLedger> internalTransactions,
+            List<ExternalTransaction> externalTransactions,
+            LocalDate date) {
+
+        // Create lookup map for internal transactions
+        Map<String, TransactionLedger> internalMap = internalTransactions.stream()
+                .filter(t -> t.getExternalTransactionId() != null)
+                .collect(Collectors.toMap(
+                        TransactionLedger::getExternalTransactionId,
+                        Function.identity(),
+                        (existing, replacement) -> existing
+                ));
+
+        Set<String> processedExternalIds = new HashSet<>();
+        List<ReconciliationRecord> records = new ArrayList<>();
+
+        // Process external transactions
+        for (ExternalTransaction external : externalTransactions) {
+            TransactionLedger internal = internalMap.get(external.getTransactionId());
+            ReconciliationRecord record = createReconciliationRecord(internal, external, date);
+            records.add(record);
+            processedExternalIds.add(external.getTransactionId());
+        }
+
+        internalTransactions.stream()
+                .filter(internal -> internal.getExternalTransactionId() != null)
+                .filter(internal -> !processedExternalIds.contains(internal.getExternalTransactionId()))
+                .forEach(internal -> {
+                    ReconciliationRecord record = createMissingExternalRecord(internal, date);
+                    records.add(record);
+                });
+
+        return records;
+    }
+
+    private ReconciliationRecord createReconciliationRecord(
+            TransactionLedger internal, ExternalTransaction external, LocalDate date) {
+
+        ReconciliationRecord.ReconciliationRecordBuilder builder = ReconciliationRecord.builder()
+                .reconciliationId(UUID.randomUUID().toString())
+                .reconciliationDate(date)
+                .externalTransactionId(external.getTransactionId())
+                .externalAmount(external.getAmount());
+
+        if (internal == null) {
+            // Missing internal transaction
+            builder.status(ReconciliationStatus.MISSING_INTERNAL)
+                    .discrepancyReason("External transaction not found in internal records");
+        } else {
+            // Transaction exists in both systems
+            builder.internalTransactionId(internal.getTransactionId())
+                    .internalAmount(internal.getAmount());
+
+            if (internal.getAmount().compareTo(external.getAmount()) == 0) {
+                builder.status(ReconciliationStatus.MATCHED)
+                        .discrepancyReason(null);
+            } else {
+                builder.status(ReconciliationStatus.AMOUNT_MISMATCH)
+                        .discrepancyReason(String.format("Amount mismatch: Internal=%s, External=%s",
+                                internal.getAmount(), external.getAmount()));
+            }
+        }
+
+        return builder.build();
+    }
+
+    private ReconciliationRecord createMissingExternalRecord(TransactionLedger internal, LocalDate date) {
+        return ReconciliationRecord.builder()
+                .reconciliationId(UUID.randomUUID().toString())
+                .reconciliationDate(date)
+                .internalTransactionId(internal.getTransactionId())
+                .externalTransactionId(internal.getExternalTransactionId())
+                .internalAmount(internal.getAmount())
+                .status(ReconciliationStatus.MISSING_EXTERNAL)
+                .discrepancyReason("Internal transaction not found in external report")
+                .build();
+    }
+
+    private ReconciliationReport buildReconciliationReport(List<ReconciliationRecord> records, LocalDate date) {
+        Map<ReconciliationStatus, Long> statusCounts = records.stream()
+                .collect(Collectors.groupingBy(ReconciliationRecord::getStatus, Collectors.counting()));
+
+        BigDecimal totalAmount = records.stream()
+                .filter(r -> r.getInternalAmount() != null || r.getExternalAmount() != null)
+                .map(r -> r.getInternalAmount() != null ? r.getInternalAmount() : r.getExternalAmount())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal matchedAmount = records.stream()
+                .filter(r -> r.getStatus() == ReconciliationStatus.MATCHED)
+                .map(ReconciliationRecord::getInternalAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        List<ReconciliationRecord> discrepancies = records.stream()
+                .filter(r -> r.getStatus() != ReconciliationStatus.MATCHED)
+                .collect(Collectors.toList());
+
+        ReconciliationSummary summary = ReconciliationSummary.builder()
+                .totalTransactions(records.size())
+                .matched(statusCounts.getOrDefault(ReconciliationStatus.MATCHED, 0L).intValue())
+                .mismatched(records.size() - statusCounts.getOrDefault(ReconciliationStatus.MATCHED, 0L).intValue())
+                .totalAmount(totalAmount)
+                .matchedAmount(matchedAmount)
+                .discrepancyAmount(totalAmount.subtract(matchedAmount))
+                .build();
+
+        return ReconciliationReport.builder()
+                .date(date)
+                .summary(summary)
+                .discrepancies(discrepancies)
+                .build();
+    }
+
+    private List<ExternalTransaction> parseCSVFile(MultipartFile file) throws IOException {
+        List<ExternalTransaction> transactions = new ArrayList<>();
+
+        try (CSVReader reader = new CSVReader(new InputStreamReader(file.getInputStream()))) {
+            reader.skip(1); // Skip header row
+            String[] nextLine;
+
+            while ((nextLine = reader.readNext()) != null) {
+                if (nextLine.length >= 3) {
+                    try {
+                        ExternalTransaction transaction = ExternalTransaction.builder()
+                                .transactionId(nextLine[0].trim())
+                                .amount(new BigDecimal(nextLine[1].trim()))
+                                .serviceType(nextLine[2].trim())
+                                .build();
+                        transactions.add(transaction);
+                    } catch (NumberFormatException e) {
+                        log.warn("Skipping invalid row: {}", Arrays.toString(nextLine));
+                    }
+                }
+            }
+        } catch (CsvValidationException e) {
+            throw new RuntimeException(e);
+        }
+
+        return transactions;
+    }
+
+    // Mock external transactions for demo purposes
+    private List<ExternalTransaction> getMockExternalTransactions(
+            List<TransactionLedger> internalTransactions, LocalDate date) {
+
+        List<ExternalTransaction> externalTransactions = new ArrayList<>();
+        Random random = new Random();
+
+        for (TransactionLedger internal : internalTransactions) {
+            if (internal.getType() == TransactionType.CONSUME && internal.getExternalTransactionId() != null) {
+
+                if (random.nextDouble() < 0.9) {
+                    externalTransactions.add(ExternalTransaction.builder()
+                            .transactionId(internal.getExternalTransactionId())
+                            .amount(internal.getAmount())
+                            .serviceType(internal.getServiceType())
+                            .build());
+                } else {
+                    // 10% chance of amount mismatch
+                    BigDecimal discrepancy = internal.getAmount().multiply(new BigDecimal("0.05")); // 5% difference
+                    externalTransactions.add(ExternalTransaction.builder()
+                            .transactionId(internal.getExternalTransactionId())
+                            .amount(internal.getAmount().subtract(discrepancy))
+                            .serviceType(internal.getServiceType())
+                            .build());
+                }
+            }
+        }
+
+        // Add some missing external transactions
+        if (random.nextDouble() < 0.1) { // 10% chance
+            externalTransactions.add(ExternalTransaction.builder()
+                    .transactionId("ext-missing-" + UUID.randomUUID().toString().substring(0, 8))
+                    .amount(new BigDecimal("25.00"))
+                    .serviceType("CRB_CHECK")
+                    .build());
+        }
+
+        return externalTransactions;
+    }
+
+    // Helper class for external transaction data
+    @lombok.Data
+    @lombok.Builder
+    public static class ExternalTransaction {
+        private String transactionId;
+        private BigDecimal amount;
+        private String serviceType;
+    }
+}

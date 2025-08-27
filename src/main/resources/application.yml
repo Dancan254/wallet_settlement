@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: wallet-settlement-system
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/walletdb
+    username: wallet_user
+    password: wallet_pass
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+
+server:
+  port: 8080
+  error:
+    include-message: always
