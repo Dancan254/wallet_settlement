@@ -20,11 +20,14 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class ReconciliationRecord {
     @Id
-    @Column(name = "reconciliation_id")
-    private String reconciliationId;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
     @Column(name = "reconciliation_date", nullable = false)
     private LocalDate reconciliationDate;
+
+    @Column(name = "reconciliation_id", nullable = false, unique = true)
+    private String reconciliationId;
 
     @Column(name = "internal_transaction_id")
     private String internalTransactionId;
@@ -38,21 +41,22 @@ public class ReconciliationRecord {
     @Column(name = "external_amount", precision = 19, scale = 2)
     private BigDecimal externalAmount;
 
-    @Enumerated(EnumType.STRING)
-    @Column(name = "status", nullable = false)
-    private ReconciliationStatus status;
+    @Column(name = "discrepancy_amount", precision = 19, scale = 2)
+    private BigDecimal discrepancyAmount;
 
     @Column(name = "discrepancy_reason")
     private String discrepancyReason;
 
-    @CreationTimestamp
-    @Column(name = "processed_at")
-    private LocalDateTime processedAt;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    private ReconciliationStatus status;
 
-    public BigDecimal getDiscrepancyAmount() {
-        if (internalAmount == null) return externalAmount;
-        if (externalAmount == null) return internalAmount.negate();
-        return internalAmount.subtract(externalAmount);
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
     }
 }
 

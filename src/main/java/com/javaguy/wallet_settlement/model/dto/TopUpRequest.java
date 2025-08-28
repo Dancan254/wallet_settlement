@@ -13,12 +13,6 @@ public class TopUpRequest {
     @Digits(integer = 10, fraction = 2, message = "Amount must have at most 2 decimal places")
     private BigDecimal amount;
 
-    @NotBlank(message = "Transaction ID is required")
-    @Size(max = 100, message = "Transaction ID must not exceed 100 characters")
-    private String transactionId;
-
     @Size(max = 255, message = "Description must not exceed 255 characters")
     private String description;
-
-    private Map<String, Object> metadata;
 }

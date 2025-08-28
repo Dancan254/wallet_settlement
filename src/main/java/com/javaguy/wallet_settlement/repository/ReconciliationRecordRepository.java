@@ -12,14 +12,21 @@ import java.time.LocalDate;
 import java.util.List;
 
 @Repository
-public interface ReconciliationRecordRepository extends JpaRepository<ReconciliationRecord, String> {
+public interface ReconciliationRecordRepository extends JpaRepository<ReconciliationRecord, Long> {
 
-    List<ReconciliationRecord> findByReconciliationDate(LocalDate date);
+    List<ReconciliationRecord> findByReconciliationDate(LocalDate reconciliationDate);
 
-    List<ReconciliationRecord> findByReconciliationDateAndStatus(LocalDate date, ReconciliationStatus status);
+    @Query("SELECT r FROM ReconciliationRecord r WHERE r.reconciliationDate = :date AND r.status = :status")
+    List<ReconciliationRecord> findByReconciliationDateAndStatus(
+            @Param("date") LocalDate reconciliationDate,
+            @Param("status") ReconciliationStatus status
+    );
 
     @Query("SELECT COUNT(r) FROM ReconciliationRecord r WHERE r.reconciliationDate = :date AND r.status = :status")
-    long countByReconciliationDateAndStatus(@Param("date") LocalDate date, @Param("status") ReconciliationStatus status);
+    long countByReconciliationDateAndStatus(
+            @Param("date") LocalDate reconciliationDate,
+            @Param("status") ReconciliationStatus status
+    );
 
-    boolean existsByReconciliationDate(LocalDate date);
+    void deleteByReconciliationDate(LocalDate reconciliationDate);
 }

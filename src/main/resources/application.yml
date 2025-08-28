@@ -3,17 +3,17 @@ spring:
     name: wallet-settlement-system
 
   datasource:
-    url: jdbc:postgresql://localhost:5433/walletdb
+    url: jdbc:postgresql://postgres:5432/walletdb
     username: wallet_user
     password: wallet_pass
     driver-class-name: org.postgresql.Driver
-    hikari:
-      maximum-pool-size: 10
 
+  flyway:
+    clean-disabled: false
   jpa:
     hibernate:
-      ddl-auto: update
-    show-sql: true
+      ddl-auto: create-drop
+    show-sql: false
     properties:
       hibernate:
         format_sql: true

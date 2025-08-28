@@ -14,6 +14,8 @@ services:
       SPRING_DATASOURCE_PASSWORD: wallet_pass
       SPRING_RABBITMQ_HOST: rabbitmq
       SPRING_RABBITMQ_PORT: 5672
+      SPRING_RABBITMQ_USER: guest
+      SPRING_RABBITMQ_PASS: guest
     restart: unless-stopped
 
   postgres:
@@ -29,11 +31,12 @@ services:
       - "5433:5432"
 
   rabbitmq:
-    image: rabbitmq:3-management
+    image: rabbitmq:latest
     container_name: wallet-rabbitmq
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
+      RABBITMQ_ENABLED_PLUGINS: rabbitmq_management
     ports:
       - "5672:5672"
       - "15672:15672"

@@ -3,11 +3,11 @@ package com.javaguy.wallet_settlement.service;
 import com.javaguy.wallet_settlement.model.dto.ReconciliationReport;
 import com.javaguy.wallet_settlement.model.dto.ReconciliationSummary;
 import com.javaguy.wallet_settlement.model.entity.ReconciliationRecord;
-import com.javaguy.wallet_settlement.model.entity.TransactionLedger;
+import com.javaguy.wallet_settlement.model.entity.Transaction;
 import com.javaguy.wallet_settlement.model.enums.ReconciliationStatus;
 import com.javaguy.wallet_settlement.model.enums.TransactionType;
 import com.javaguy.wallet_settlement.repository.ReconciliationRecordRepository;
-import com.javaguy.wallet_settlement.repository.TransactionLedgerRepository;
+import com.javaguy.wallet_settlement.repository.TransactionRepository;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVWriter;
 import com.opencsv.exceptions.CsvValidationException;
@@ -34,15 +34,13 @@ import java.util.stream.Collectors;
 public class ReconciliationService {
 
     private final ReconciliationRecordRepository reconciliationRecordRepository;
-    private final TransactionLedgerRepository ledgerRepository;
-
-    private static final int BATCH_SIZE = 1000;
+    private final TransactionRepository transactionRepository;
 
     @Transactional
     public ReconciliationReport runReconciliation(LocalDate date){
         log.info("Running reconciliation for date: {}", date);
 
-        List<TransactionLedger> internalTransactions = ledgerRepository.findCompletedTransactionsByDate(date);
+        List<Transaction> internalTransactions = transactionRepository.findCompletedTransactionsByDate(date);
         log.info("found {} internal transactions for {}", internalTransactions.size(), date);
 
         //i have created mock external transactions for testing
@@ -61,7 +59,7 @@ public class ReconciliationService {
     public void processExternalReport(MultipartFile file, LocalDate date) throws IOException {
         log.info("Processing external report file: {} for date: {}",file.getOriginalFilename(), date);
         List<ExternalTransaction> externalTransactions = parseCSVFile(file);
-        List<TransactionLedger> internalTransactions = ledgerRepository.findCompletedTransactionsByDate(date);
+        List<Transaction> internalTransactions = transactionRepository.findCompletedTransactionsByDate(date);
 
         List<ReconciliationRecord> reconciliationRecords = performReconciliation(
                 internalTransactions, externalTransactions, date
@@ -115,81 +113,104 @@ public class ReconciliationService {
 
 
     private List<ReconciliationRecord> performReconciliation(
-            List<TransactionLedger> internalTransactions,
+            List<Transaction> internalTransactions,
             List<ExternalTransaction> externalTransactions,
             LocalDate date) {
 
-        // Create lookup map for internal transactions
-        Map<String, TransactionLedger> internalMap = internalTransactions.stream()
-                .filter(t -> t.getExternalTransactionId() != null)
+        // Create lookup map for internal transactions using a composite key
+        Map<String, Transaction> internalMap = internalTransactions.stream()
                 .collect(Collectors.toMap(
-                        TransactionLedger::getExternalTransactionId,
+                        this::generateInternalMatchKey,
                         Function.identity(),
                         (existing, replacement) -> existing
                 ));
 
-        Set<String> processedExternalIds = new HashSet<>();
-        List<ReconciliationRecord> records = new ArrayList<>();
+        // Create lookup map for external transactions using a composite key
+        Map<String, ExternalTransaction> externalMap = externalTransactions.stream()
+                .collect(Collectors.toMap(
+                        this::generateExternalMatchKey,
+                        Function.identity(),
+                        (existing, replacement) -> existing
+                ));
 
-        // Process external transactions
-        for (ExternalTransaction external : externalTransactions) {
-            TransactionLedger internal = internalMap.get(external.getTransactionId());
-            ReconciliationRecord record = createReconciliationRecord(internal, external, date);
-            records.add(record);
-            processedExternalIds.add(external.getTransactionId());
+        List<ReconciliationRecord> records = new ArrayList<>();
+        Set<String> matchedInternalKeys = new HashSet<>();
+        Set<String> matchedExternalKeys = new HashSet<>();
+
+        // Phase 1: Match internal transactions with external transactions
+        for (Transaction internal : internalTransactions) {
+            String internalKey = generateInternalMatchKey(internal);
+            ExternalTransaction external = externalMap.get(internalKey);
+
+            if (external != null) {
+                // Found a match
+                records.add(createReconciliationRecord(internal, external, date));
+                matchedInternalKeys.add(internalKey);
+                matchedExternalKeys.add(internalKey);
+            } else {
+                // Internal transaction potentially missing in external report
+                // This will be handled in Phase 2 if it's not a true match
+            }
         }
 
+        // Phase 2: Identify mismatches and missing records
+        // Add records for internal transactions not matched in Phase 1
         internalTransactions.stream()
-                .filter(internal -> internal.getExternalTransactionId() != null)
-                .filter(internal -> !processedExternalIds.contains(internal.getExternalTransactionId()))
-                .forEach(internal -> {
-                    ReconciliationRecord record = createMissingExternalRecord(internal, date);
-                    records.add(record);
-                });
+                .filter(internal -> !matchedInternalKeys.contains(generateInternalMatchKey(internal)))
+                .forEach(internal -> records.add(createMissingExternalRecord(internal, date)));
+
+        // Add records for external transactions not matched in Phase 1
+        externalTransactions.stream()
+                .filter(external -> !matchedExternalKeys.contains(generateExternalMatchKey(external)))
+                .forEach(external -> records.add(createMissingInternalRecord(external, date)));
 
         return records;
     }
 
     private ReconciliationRecord createReconciliationRecord(
-            TransactionLedger internal, ExternalTransaction external, LocalDate date) {
+            Transaction internal, ExternalTransaction external, LocalDate date) {
 
         ReconciliationRecord.ReconciliationRecordBuilder builder = ReconciliationRecord.builder()
                 .reconciliationId(UUID.randomUUID().toString())
                 .reconciliationDate(date)
+                .internalTransactionId(internal.getTransactionId())
                 .externalTransactionId(external.getTransactionId())
+                .internalAmount(internal.getAmount())
                 .externalAmount(external.getAmount());
 
-        if (internal == null) {
-            // Missing internal transaction
-            builder.status(ReconciliationStatus.MISSING_INTERNAL)
-                    .discrepancyReason("External transaction not found in internal records");
+        if (internal.getAmount().compareTo(external.getAmount()) == 0) {
+            builder.status(ReconciliationStatus.MATCHED)
+                    .discrepancyAmount(BigDecimal.ZERO)
+                    .discrepancyReason(null);
         } else {
-            // Transaction exists in both systems
-            builder.internalTransactionId(internal.getTransactionId())
-                    .internalAmount(internal.getAmount());
-
-            if (internal.getAmount().compareTo(external.getAmount()) == 0) {
-                builder.status(ReconciliationStatus.MATCHED)
-                        .discrepancyReason(null);
-            } else {
-                builder.status(ReconciliationStatus.AMOUNT_MISMATCH)
-                        .discrepancyReason(String.format("Amount mismatch: Internal=%s, External=%s",
-                                internal.getAmount(), external.getAmount()));
-            }
+            builder.status(ReconciliationStatus.AMOUNT_MISMATCH)
+                    .discrepancyAmount(internal.getAmount().subtract(external.getAmount()))
+                    .discrepancyReason(String.format("Amount mismatch: Internal=%s, External=%s",
+                            internal.getAmount(), external.getAmount()));
         }
 
         return builder.build();
     }
 
-    private ReconciliationRecord createMissingExternalRecord(TransactionLedger internal, LocalDate date) {
+    private ReconciliationRecord createMissingExternalRecord(Transaction internal, LocalDate date) {
         return ReconciliationRecord.builder()
                 .reconciliationId(UUID.randomUUID().toString())
                 .reconciliationDate(date)
                 .internalTransactionId(internal.getTransactionId())
-                .externalTransactionId(internal.getExternalTransactionId())
                 .internalAmount(internal.getAmount())
                 .status(ReconciliationStatus.MISSING_EXTERNAL)
                 .discrepancyReason("Internal transaction not found in external report")
+                .build();
+    }
+
+    private ReconciliationRecord createMissingInternalRecord(ExternalTransaction external, LocalDate date) {
+        return ReconciliationRecord.builder()
+                .reconciliationId(UUID.randomUUID().toString())
+                .reconciliationDate(date)
+                .externalTransactionId(external.getTransactionId())
+                .externalAmount(external.getAmount())
+                .status(ReconciliationStatus.MISSING_INTERNAL)
+                .discrepancyReason("External transaction not found in internal records")
                 .build();
     }
 
@@ -235,15 +256,17 @@ public class ReconciliationService {
             String[] nextLine;
 
             while ((nextLine = reader.readNext()) != null) {
-                if (nextLine.length >= 3) {
+                if (nextLine.length >= 5) { // Assuming 5 columns now: transactionId, amount, customerId, type, transactionDate
                     try {
                         ExternalTransaction transaction = ExternalTransaction.builder()
                                 .transactionId(nextLine[0].trim())
                                 .amount(new BigDecimal(nextLine[1].trim()))
-                                .serviceType(nextLine[2].trim())
+                                .customerId(nextLine[2].trim())
+                                .type(TransactionType.valueOf(nextLine[3].trim().toUpperCase()))
+                                .transactionDate(LocalDate.parse(nextLine[4].trim()))
                                 .build();
                         transactions.add(transaction);
-                    } catch (NumberFormatException e) {
+                    } catch (IllegalArgumentException e) {
                         log.warn("Skipping invalid row: {}", Arrays.toString(nextLine));
                     }
                 }
@@ -257,39 +280,45 @@ public class ReconciliationService {
 
     // Mock external transactions for demo purposes
     private List<ExternalTransaction> getMockExternalTransactions(
-            List<TransactionLedger> internalTransactions, LocalDate date) {
+            List<Transaction> internalTransactions, LocalDate date) {
 
         List<ExternalTransaction> externalTransactions = new ArrayList<>();
         Random random = new Random();
 
-        for (TransactionLedger internal : internalTransactions) {
-            if (internal.getType() == TransactionType.CONSUME && internal.getExternalTransactionId() != null) {
-
-                if (random.nextDouble() < 0.9) {
-                    externalTransactions.add(ExternalTransaction.builder()
-                            .transactionId(internal.getExternalTransactionId())
-                            .amount(internal.getAmount())
-                            .serviceType(internal.getServiceType())
-                            .build());
-                } else {
-                    // 10% chance of amount mismatch
-                    BigDecimal discrepancy = internal.getAmount().multiply(new BigDecimal("0.05")); // 5% difference
-                    externalTransactions.add(ExternalTransaction.builder()
-                            .transactionId(internal.getExternalTransactionId())
-                            .amount(internal.getAmount().subtract(discrepancy))
-                            .serviceType(internal.getServiceType())
-                            .build());
-                }
+        for (Transaction internal : internalTransactions) {
+            if (random.nextDouble() < 0.9) { // 90% chance of a matching transaction
+                externalTransactions.add(ExternalTransaction.builder()
+                        .transactionId("EXT-" + internal.getTransactionId())
+                        .amount(internal.getAmount())
+                        .customerId(internal.getWallet().getCustomerId())
+                        .type(internal.getType())
+                        .transactionDate(date)
+                        .build());
+            } else if (random.nextDouble() < 0.05) { // 5% chance of amount mismatch
+                BigDecimal discrepancy = internal.getAmount().multiply(new BigDecimal("0.05")); // 5% difference
+                externalTransactions.add(ExternalTransaction.builder()
+                        .transactionId("EXT-" + internal.getTransactionId())
+                        .amount(internal.getAmount().subtract(discrepancy))
+                        .customerId(internal.getWallet().getCustomerId())
+                        .type(internal.getType())
+                        .transactionDate(date)
+                        .build());
+            } else { // 5% chance of missing external (no entry added)
+                // Do nothing, simulate missing external transaction
             }
         }
 
-        // Add some missing external transactions
-        if (random.nextDouble() < 0.1) { // 10% chance
-            externalTransactions.add(ExternalTransaction.builder()
-                    .transactionId("ext-missing-" + UUID.randomUUID().toString().substring(0, 8))
-                    .amount(new BigDecimal("25.00"))
-                    .serviceType("CRB_CHECK")
-                    .build());
+        // Add some missing external transactions (not present in internal)
+        for (int i = 0; i < 2; i++) {
+            if (random.nextDouble() < 0.1) { // 10% chance of adding a completely new external transaction
+                externalTransactions.add(ExternalTransaction.builder()
+                        .transactionId("EXT-MISSING-" + UUID.randomUUID().toString().substring(0, 8))
+                        .amount(new BigDecimal("100.00"))
+                        .customerId("CUST-" + UUID.randomUUID().toString().substring(0, 8))
+                        .type(TransactionType.TOPUP)
+                        .transactionDate(date)
+                        .build());
+            }
         }
 
         return externalTransactions;
@@ -301,6 +330,16 @@ public class ReconciliationService {
     public static class ExternalTransaction {
         private String transactionId;
         private BigDecimal amount;
-        private String serviceType;
+        private String customerId;
+        private TransactionType type;
+        private LocalDate transactionDate;
+    }
+
+    private String generateInternalMatchKey(Transaction internal) {
+        return internal.getWallet().getCustomerId() + "|" + internal.getAmount() + "|" + internal.getType() + "|" + internal.getCreatedAt().toLocalDate();
+    }
+
+    private String generateExternalMatchKey(ExternalTransaction external) {
+        return external.getCustomerId() + "|" + external.getAmount() + "|" + external.getType() + "|" + external.getTransactionDate();
     }
 }

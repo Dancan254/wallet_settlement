@@ -18,16 +18,17 @@ import java.time.LocalDateTime;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TransactionLedger {
+public class Transaction {
     @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
     @Column(name = "transaction_id")
     private String transactionId;
 
-    @Column(name = "wallet_id", nullable = false)
-    private String walletId;
-
-    @Column(name = "customer_id", nullable = false)
-    private String customerId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "wallet_id", nullable = false)
+    private Wallet wallet;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "transaction_type", nullable = false)
@@ -36,30 +37,21 @@ public class TransactionLedger {
     @Column(name = "amount", nullable = false, precision = 19, scale = 2)
     private BigDecimal amount;
 
-    @Column(name = "balance_after", nullable = false, precision = 19, scale = 2)
-    private BigDecimal balanceAfter;
-
     @Column(name = "description")
     private String description;
 
     @Enumerated(EnumType.STRING)
+    @Builder.Default
     @Column(name = "status", nullable = false)
     private TransactionStatus status = TransactionStatus.PENDING;
-
-    @Column(name = "external_transaction_id", unique = true)
-    private String externalTransactionId;
-
-    @Column(name = "service_type")
-    private String serviceType;
 
     @CreationTimestamp
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
-    @Column(name = "processed_at")
-    private LocalDateTime processedAt;
-
-    @Column(name = "metadata", columnDefinition = "TEXT")
-    private String metadata;
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+    }
 }
 

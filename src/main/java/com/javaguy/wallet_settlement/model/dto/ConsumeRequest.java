@@ -13,16 +13,10 @@ public class ConsumeRequest {
     @Digits(integer = 10, fraction = 2, message = "Amount must have at most 2 decimal places")
     private BigDecimal amount;
 
-    @NotBlank(message = "Service type is required")
-    @Size(max = 50, message = "Service type must not exceed 50 characters")
-    private String serviceType;
-
-    @NotBlank(message = "Transaction ID is required")
-    @Size(max = 100, message = "Transaction ID must not exceed 100 characters")
-    private String transactionId;
+//    @NotBlank(message = "Service type is required")
+//    @Size(max = 50, message = "Service type must not exceed 50 characters")
+//    private String serviceType;
 
     @Size(max = 255, message = "Description must not exceed 255 characters")
     private String description;
-
-    private Map<String, Object> metadata;
 }

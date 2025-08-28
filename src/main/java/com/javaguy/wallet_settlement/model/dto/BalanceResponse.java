@@ -12,6 +12,5 @@ public class BalanceResponse {
     private String walletId;
     private String customerId;
     private BigDecimal balance;
-    private String currency;
     private LocalDateTime lastUpdated;
 }

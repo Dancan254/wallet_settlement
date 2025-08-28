@@ -9,12 +9,12 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.Optional;
 
-public interface WalletRepository extends JpaRepository <Wallet, String>{
+public interface WalletRepository extends JpaRepository <Wallet, Long>{
     Optional<Wallet> findByCustomerId(String customerId);
 
     @Lock(LockModeType.OPTIMISTIC)
-    @Query("SELECT w FROM Wallet w WHERE w.walletId = :walletId")
-    Optional<Wallet> findByIdWithLock(@Param("walletId") String walletId);
+    @Query("SELECT w FROM Wallet w WHERE w.customerId = :customerId")
+    Optional<Wallet> findByCustomerIdWithLock(@Param("customerId") String customerId);
 
     boolean existsByCustomerId(String customerId);
 }

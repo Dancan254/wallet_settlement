@@ -1,19 +1,22 @@
 package com.javaguy.wallet_settlement.model.dto;
 
+import com.javaguy.wallet_settlement.model.enums.TransactionStatus;
 import com.javaguy.wallet_settlement.model.enums.TransactionType;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 
 @Data
 @Builder
-public class TransactionCompletedEvent {
+@AllArgsConstructor
+@NoArgsConstructor
+public class TransactionResponse {
     private String transactionId;
-    private String walletId;
-    private String customerId;
     private TransactionType type;
     private BigDecimal amount;
-    private String serviceType;
-    private String metadata;
+    private String description;
+    private TransactionStatus status;
 }

@@ -2,66 +2,87 @@ package com.javaguy.wallet_settlement.controller;
 
 import com.javaguy.wallet_settlement.model.dto.ReconciliationReport;
 import com.javaguy.wallet_settlement.service.ReconciliationService;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.time.LocalDate;
 
+/**
+ * REST controller for managing reconciliation operations.
+ * Provides endpoints for processing reconciliation files, retrieving reconciliation reports,
+ * and exporting reconciliation data.
+ */
 @RestController
 @RequestMapping("/api/v1/reconciliation")
 @RequiredArgsConstructor
-@Slf4j
 public class ReconciliationController {
 
     private final ReconciliationService reconciliationService;
 
+    /**
+     * Processes a reconciliation file for a given date.
+     * The file should contain external transaction data to be reconciled against internal records.
+     * @param date The date for which to process reconciliation, in ISO_DATE format (e.g., "YYYY-MM-DD").
+     * @param file The multipart file containing the reconciliation data.
+     * @return A ResponseEntity indicating the success of the reconciliation process.
+     */
+    @PostMapping("/process")
+    public ResponseEntity<String> processReconciliation(
+            @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam("file") MultipartFile file) {
+
+        try {
+            reconciliationService.processExternalReport(file, date);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to process external reconciliation report", e);
+        }
+        return ResponseEntity.ok("Reconciliation processed successfully for date: " + date);
+    }
+
+    /**
+     * Retrieves a reconciliation report for a specified date.
+     * The report summarizes the reconciliation status of transactions for that day.
+     * @param date The date for which to retrieve the reconciliation report, in ISO_DATE format.
+     * @return A ResponseEntity containing the ReconciliationReport object.
+     */
     @GetMapping("/report")
     public ResponseEntity<ReconciliationReport> getReconciliationReport(
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
+            @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
 
-        log.info("Fetching reconciliation report for date: {}", date);
         ReconciliationReport report = reconciliationService.getReconciliationReport(date);
         return ResponseEntity.ok(report);
     }
 
-    @PostMapping("/run")
-    public ResponseEntity<ReconciliationReport> runReconciliation(
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-
-        log.info("Running reconciliation for date: {}", date);
-        ReconciliationReport report = reconciliationService.runReconciliation(date);
-        return ResponseEntity.ok(report);
-    }
-
-    @PostMapping("/upload")
-    public ResponseEntity<String> uploadExternalReport(
-            @RequestParam("file") MultipartFile file,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
-
-        try {
-            log.info("Processing uploaded file: {} for date: {}", file.getOriginalFilename(), date);
-            reconciliationService.processExternalReport(file, date);
-            return ResponseEntity.ok("File processed successfully");
-        } catch (IOException e) {
-            log.error("Error processing file", e);
-            return ResponseEntity.badRequest().body("Error processing file: " + e.getMessage());
-        }
-    }
-
+    /**
+     * Exports the reconciliation data for a given date as a CSV file.
+     * @param date The date for which to export reconciliation data, in ISO_DATE format.
+     * @return A ResponseEntity containing the CSV data as a byte array, with appropriate headers for file download.
+     */
     @GetMapping("/export")
-    public void exportReconciliationReport(
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
-            HttpServletResponse response) throws IOException {
+    public ResponseEntity<byte[]> exportReconciliation(
+            @RequestParam("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
 
-        response.setContentType("text/csv");
-        response.setHeader(HttpHeaders.CONTENT_DISPOSITION,
-                "attachment; filename=reconciliation_" + date + ".csv");
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        try {
+            reconciliationService.exportReconciliationToCsv(date, outputStream);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to generate CSV for reconciliation report", e);
+        }
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentDispositionFormData("attachment", "reconciliation_" + date + ".csv");
+
+        return ResponseEntity.ok()
+                .headers(headers)
+                .body(outputStream.toByteArray());
     }
 }
