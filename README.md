@@ -11,6 +11,10 @@ A microservice for managing customer wallet balances and performing daily reconc
 - Docker containerization
 - Comprehensive testing
 
+## Architecture
+
+![Architecture Diagram](images/architecture.png)
+
 ## Quick Start
 
 ### Prerequisites
