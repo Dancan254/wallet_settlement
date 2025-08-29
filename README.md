@@ -92,23 +92,24 @@ This phase will simulate creating internal transactions, which are necessary for
     ```bash
     curl -X POST http://localhost:8080/api/v1/wallets/CUST_TEST_001/topup -H "Content-Type: application/json" -d '{ "amount": 100.00, "description": "First top-up", "requestId": "CUST_TEST_001_TOPUP_1" }'
     ```
-    **Expected Response:** `{"transactionId": "UUID-OF-TOPUP-TXN", "type": "TOPUP", "amount": 100.00, "description": "First top-up", "status": "COMPLETED"}`
+    **Expected Response:** `{"transactionId": "UUID-OF-TOPUP-TXN", "type": "TOPUP", "amount": 100.00, "description": "First top-up", "status": "COMPLETED"}`            
+    
     **Observe RabbitMQ:** Check `http://localhost:15672/#/queues` for `transactionQueue` activity. Messages should briefly appear and then be consumed.
 
-3.  **Consume from Wallet (CUST_TEST_001):**
+4.  **Consume from Wallet (CUST_TEST_001):**
     ```bash
     curl -X POST http://localhost:8080/api/v1/wallets/CUST_TEST_001/consume -H "Content-Type: application/json" -d '{ "amount": 50.00, "description": "First consume", "requestId": "CUST_TEST_001_CONSUME_1" }'
     ```
     **Expected Response:** `{"transactionId": "UUID-OF-CONSUME-TXN", "type": "CONSUME", "amount": 50.00, "description": "First consume", "status": "COMPLETED"}`
     **Observe RabbitMQ:** Repeat RabbitMQ observation.
 
-4.  **Get Wallet Balance (CUST_TEST_001):**
+5.  **Get Wallet Balance (CUST_TEST_001):**
     ```bash
     curl -X GET http://localhost:8080/api/v1/wallets/CUST_TEST_001/balance
     ```
     **Expected Response:** `{"customerId": "CUST_TEST_001", "balance": 50.00}`
 
-5.  **Get Wallet Transactions (CUST_TEST_001):**
+6.  **Get Wallet Transactions (CUST_TEST_001):**
     ```bash
     curl -X GET http://localhost:8080/api/v1/wallets/CUST_TEST_001/transactions
     ```
