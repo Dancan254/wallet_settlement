@@ -26,6 +26,9 @@ public class Transaction {
     @Column(name = "transaction_id")
     private String transactionId;
 
+    @Column(name = "request_id", unique = true)
+    private String requestId;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "wallet_id", nullable = false)
     private Wallet wallet;

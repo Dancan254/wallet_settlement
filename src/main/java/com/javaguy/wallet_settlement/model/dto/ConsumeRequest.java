@@ -19,4 +19,7 @@ public class ConsumeRequest {
 
     @Size(max = 255, message = "Description must not exceed 255 characters")
     private String description;
+
+    @NotBlank(message = "Request ID cannot be blank")
+    private String requestId;
 }

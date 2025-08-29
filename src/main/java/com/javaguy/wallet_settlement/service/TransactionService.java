@@ -13,6 +13,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -25,7 +26,14 @@ public class TransactionService {
     @Transactional
     public Transaction createTransaction(String transactionId, Wallet wallet,
                                          TransactionType type,
-                                         BigDecimal amount, String description) {
+                                         BigDecimal amount, String description,
+                                         String requestId) {
+
+        if (transactionRepository.existsByRequestId(requestId)) {
+            // If a transaction with this requestId already exists, return it to ensure idempotency
+            return transactionRepository.findByRequestId(requestId).orElseThrow(
+                    () -> new DuplicateTransactionException("Duplicate requestId found but transaction not retrieved: " + requestId));
+        }
 
         if (transactionRepository.existsByTransactionId(transactionId)) {
             throw new DuplicateTransactionException("Transaction already exists: " + transactionId);
@@ -33,6 +41,7 @@ public class TransactionService {
 
         Transaction transaction = new Transaction();
         transaction.setTransactionId(transactionId);
+        transaction.setRequestId(requestId);
         transaction.setWallet(wallet);
         transaction.setType(type);
         transaction.setAmount(amount);
@@ -44,6 +53,11 @@ public class TransactionService {
         transactionPublisher.publishTransaction(saved);
 
         return saved;
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<Transaction> findByRequestId(String requestId) {
+        return transactionRepository.findByRequestId(requestId);
     }
 
     public List<Transaction> getTransactionsByDate(LocalDate date) {

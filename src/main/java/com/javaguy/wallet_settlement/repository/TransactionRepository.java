@@ -26,4 +26,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
     List<Transaction> findCompletedTransactionsByDate(@Param("date") LocalDate date);
 
     boolean existsByTransactionId(String transactionId);
+
+    Optional<Transaction> findByRequestId(String requestId);
+
+    boolean existsByRequestId(String requestId);
 }

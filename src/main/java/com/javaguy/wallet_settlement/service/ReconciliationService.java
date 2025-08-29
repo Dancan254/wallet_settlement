@@ -11,6 +11,8 @@ import com.javaguy.wallet_settlement.repository.TransactionRepository;
 import com.opencsv.CSVReader;
 import com.opencsv.CSVWriter;
 import com.opencsv.exceptions.CsvValidationException;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -56,16 +58,19 @@ public class ReconciliationService {
     }
 
     @Transactional
-    public void processExternalReport(MultipartFile file, LocalDate date) throws IOException {
-        log.info("Processing external report file: {} for date: {}",file.getOriginalFilename(), date);
+    public void processExternalReportCsv(MultipartFile file, LocalDate date) throws IOException {
+        log.info("Processing external CSV report file: {} for date: {}",file.getOriginalFilename(), date);
         List<ExternalTransaction> externalTransactions = parseCSVFile(file);
-        List<Transaction> internalTransactions = transactionRepository.findCompletedTransactionsByDate(date);
+        processAndSaveReconciliation(externalTransactions, date);
+        log.info("Processed {} reconciliation records from CSV for date: {}", externalTransactions.size(), date);
+    }
 
-        List<ReconciliationRecord> reconciliationRecords = performReconciliation(
-                internalTransactions, externalTransactions, date
-        );
-        reconciliationRecordRepository.saveAll(reconciliationRecords);
-        log.info("Processed {} reconciliation records for date: {}", reconciliationRecords.size(), date);
+    @Transactional
+    public void processExternalReportJson(MultipartFile file, LocalDate date) throws IOException {
+        log.info("Processing external JSON report file: {} for date: {}",file.getOriginalFilename(), date);
+        List<ExternalTransaction> externalTransactions = parseJsonFile(file);
+        processAndSaveReconciliation(externalTransactions, date);
+        log.info("Processed {} reconciliation records from JSON for date: {}", externalTransactions.size(), date);
     }
 
     @Transactional(readOnly = true)
@@ -88,13 +93,13 @@ public class ReconciliationService {
             for (ReconciliationRecord record : records) {
                 writer.writeNext(new String[]{
                         record.getReconciliationId(),
-                        record.getInternalTransactionId(),
-                        record.getExternalTransactionId(),
+                        record.getInternalTransactionId() != null ? record.getInternalTransactionId() : "",
+                        record.getExternalTransactionId() != null ? record.getExternalTransactionId() : "",
                         record.getInternalAmount() != null ? record.getInternalAmount().toString() : "",
                         record.getExternalAmount() != null ? record.getExternalAmount().toString() : "",
                         String.valueOf(record.getStatus()),
-                        record.getDiscrepancyAmount().toString(),
-                        record.getDiscrepancyReason()
+                        record.getDiscrepancyAmount() != null ? record.getDiscrepancyAmount().toString() : "",
+                        record.getDiscrepancyReason() != null ? record.getDiscrepancyReason() : ""
                 });
             }
         }
@@ -199,6 +204,7 @@ public class ReconciliationService {
                 .internalTransactionId(internal.getTransactionId())
                 .internalAmount(internal.getAmount())
                 .status(ReconciliationStatus.MISSING_EXTERNAL)
+                .discrepancyAmount(null)
                 .discrepancyReason("Internal transaction not found in external report")
                 .build();
     }
@@ -210,6 +216,7 @@ public class ReconciliationService {
                 .externalTransactionId(external.getTransactionId())
                 .externalAmount(external.getAmount())
                 .status(ReconciliationStatus.MISSING_INTERNAL)
+                .discrepancyAmount(null)
                 .discrepancyReason("External transaction not found in internal records")
                 .build();
     }
@@ -276,6 +283,25 @@ public class ReconciliationService {
         }
 
         return transactions;
+    }
+
+    private List<ExternalTransaction> parseJsonFile(MultipartFile file) throws IOException {
+        ObjectMapper objectMapper = new ObjectMapper();
+        objectMapper.findAndRegisterModules(); // Register Java 8 Date/Time modules
+        try {
+            return Arrays.asList(objectMapper.readValue(file.getBytes(), ExternalTransaction[].class));
+        } catch (JsonProcessingException e) {
+            throw new IOException("Failed to parse JSON file", e);
+        }
+    }
+
+    private void processAndSaveReconciliation(List<ExternalTransaction> externalTransactions, LocalDate date) {
+        List<Transaction> internalTransactions = transactionRepository.findCompletedTransactionsByDate(date);
+
+        List<ReconciliationRecord> reconciliationRecords = performReconciliation(
+                internalTransactions, externalTransactions, date
+        );
+        reconciliationRecordRepository.saveAll(reconciliationRecords);
     }
 
     // Mock external transactions for demo purposes

@@ -6,9 +6,10 @@ CREATE TABLE wallet (
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE TABLE transaction (
+CREATE TABLE transaction_ledger (
              id BIGSERIAL PRIMARY KEY,
              transaction_id VARCHAR(255) UNIQUE NOT NULL,
+             request_id VARCHAR(255) UNIQUE,
              wallet_id BIGINT NOT NULL REFERENCES wallet(id),
              type VARCHAR(20) NOT NULL CHECK (type IN ('TOPUP', 'CONSUME')),
              amount DECIMAL(19,2) NOT NULL,
@@ -17,20 +18,24 @@ CREATE TABLE transaction (
              created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE reconciliation_record (
+CREATE TABLE reconciliation_records (
            id BIGSERIAL PRIMARY KEY,
            reconciliation_date DATE NOT NULL,
-           transaction_id VARCHAR(255),
+           reconciliation_id VARCHAR(255) UNIQUE NOT NULL,
+           internal_transaction_id VARCHAR(255),
+           external_transaction_id VARCHAR(255),
            internal_amount DECIMAL(19,2),
            external_amount DECIMAL(19,2),
+           discrepancy_amount DECIMAL(19,2),
+           discrepancy_reason TEXT,
            status VARCHAR(20) NOT NULL CHECK (status IN ('MATCHED', 'MISSING_INTERNAL', 'MISSING_EXTERNAL', 'AMOUNT_MISMATCH')),
            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_reconciliation_date ON reconciliation_record(reconciliation_date);
-CREATE INDEX idx_reconciliation_transaction_id ON reconciliation_record(transaction_id);
-CREATE INDEX idx_reconciliation_status ON reconciliation_record(status);
-CREATE INDEX idx_transaction_wallet_id ON transaction(wallet_id);
-CREATE INDEX idx_transaction_transaction_id ON transaction(transaction_id);
-CREATE INDEX idx_transaction_created_at ON transaction(created_at);
+CREATE INDEX idx_reconciliation_date ON reconciliation_records(reconciliation_date);
+CREATE INDEX idx_reconciliation_status ON reconciliation_records(status);
+
+CREATE INDEX idx_transaction_ledger_wallet_id ON transaction_ledger(wallet_id);
+CREATE INDEX idx_transaction_ledger_transaction_id ON transaction_ledger(transaction_id);
+CREATE INDEX idx_transaction_ledger_created_at ON transaction_ledger(created_at);
 CREATE INDEX idx_wallet_customer_id ON wallet(customer_id);

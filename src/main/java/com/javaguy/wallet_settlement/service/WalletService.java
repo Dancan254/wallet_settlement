@@ -1,8 +1,10 @@
 package com.javaguy.wallet_settlement.service;
 
 import com.javaguy.wallet_settlement.exception.InsufficientFundsException;
+import com.javaguy.wallet_settlement.exception.WalletAlreadyExistsException;
 import com.javaguy.wallet_settlement.exception.WalletNotFoundException;
 import com.javaguy.wallet_settlement.model.dto.ConsumeRequest;
+import com.javaguy.wallet_settlement.model.dto.CreateWalletRequest;
 import com.javaguy.wallet_settlement.model.dto.TopUpRequest;
 import com.javaguy.wallet_settlement.model.dto.TransactionResponse;
 import com.javaguy.wallet_settlement.model.dto.WalletResponse;
@@ -16,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -26,7 +29,28 @@ public class WalletService {
     private final TransactionService transactionService;
 
     @Transactional
+    public WalletResponse createWallet(CreateWalletRequest request) {
+        String customerId = request.getCustomerId();
+        if (walletRepository.findByCustomerId(customerId).isPresent()) {
+            throw new WalletAlreadyExistsException("Wallet already exists for customer: " + customerId);
+        }
+
+        Wallet newWallet = new Wallet();
+        newWallet.setCustomerId(customerId);
+        newWallet.setBalance(BigDecimal.ZERO);
+        Wallet savedWallet = walletRepository.save(newWallet);
+
+        return new WalletResponse(savedWallet.getCustomerId(), savedWallet.getBalance());
+    }
+
+    @Transactional
     public TransactionResponse topUp(String customerId, TopUpRequest request) {
+        // Check for existing transaction with the same requestId to ensure idempotency
+        Optional<Transaction> existingTransaction = transactionService.findByRequestId(request.getRequestId());
+        if (existingTransaction.isPresent()) {
+            return toTransactionResponse(existingTransaction.get());
+        }
+
         Wallet wallet = getOrCreateWallet(customerId);
         String transactionId = generateTransactionId();
 
@@ -38,20 +62,21 @@ public class WalletService {
                 wallet,
                 TransactionType.TOPUP,
                 request.getAmount(),
-                request.getDescription()
+                request.getDescription(),
+                request.getRequestId()
         );
 
-        return new TransactionResponse(
-                transaction.getTransactionId(),
-                transaction.getType(),
-                transaction.getAmount(),
-                transaction.getDescription(),
-                transaction.getStatus()
-        );
+        return toTransactionResponse(transaction);
     }
 
     @Transactional
     public TransactionResponse consume(String customerId, ConsumeRequest request) {
+        // Check for existing transaction with the same requestId to ensure idempotency
+        Optional<Transaction> existingTransaction = transactionService.findByRequestId(request.getRequestId());
+        if (existingTransaction.isPresent()) {
+            return toTransactionResponse(existingTransaction.get());
+        }
+
         Wallet wallet = walletRepository.findByCustomerIdWithLock(customerId)
                 .orElseThrow(() -> new WalletNotFoundException("Wallet not found for customer: " + customerId));
 
@@ -69,16 +94,11 @@ public class WalletService {
                 wallet,
                 TransactionType.CONSUME,
                 request.getAmount(),
-                request.getDescription()
+                request.getDescription(),
+                request.getRequestId()
         );
 
-        return new TransactionResponse(
-                transaction.getTransactionId(),
-                transaction.getType(),
-                transaction.getAmount(),
-                transaction.getDescription(),
-                transaction.getStatus()
-        );
+        return toTransactionResponse(transaction);
     }
 
     public WalletResponse getBalance(String customerId) {
@@ -100,5 +120,15 @@ public class WalletService {
 
     private String generateTransactionId() {
         return "TXN-" + UUID.randomUUID().toString();
+    }
+
+    private TransactionResponse toTransactionResponse(Transaction transaction) {
+        return new TransactionResponse(
+                transaction.getTransactionId(),
+                transaction.getType(),
+                transaction.getAmount(),
+                transaction.getDescription(),
+                transaction.getStatus()
+        );
     }
 }
